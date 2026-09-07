@@ -1,7 +1,7 @@
 """
-Data layer for Analah Capital Ops Platform.
-- One Master Excel file for all current tasks (team-wise)
-- Separate downloadable reports for POA and EOD
+Data layer for Analah Capital Ops Platform
+- Master Excel file for all tasks (team-wise)
+- Supports Team column
 """
 
 import os
@@ -11,9 +11,6 @@ from typing import Optional
 import streamlit as st
 from openpyxl.styles import Font, PatternFill, Alignment, Border, Side
 
-# ============================================================
-# MASTER EXCEL FILE (Current Tasks - Team wise)
-# ============================================================
 DATA_DIR = "data"
 MASTER_FILE = os.path.join(DATA_DIR, "Analah_Master_Tasks.xlsx")
 
@@ -22,10 +19,11 @@ COLUMNS = [
     "date",
     "username",
     "name",
+    "team",           # NEW
     "type",           # POA | EOD | Task
     "content",
-    "priority",       # High | Medium | Low
-    "status",         # Open | In Progress | Completed | Blocked
+    "priority",
+    "status",
     "created_at",
     "updated_at",
 ]
@@ -96,6 +94,7 @@ def generate_id(username: str) -> str:
 def add_entry(
     username: str,
     name: str,
+    team: str,
     entry_type: str,
     content: str,
     priority: str = "Medium",
@@ -104,11 +103,13 @@ def add_entry(
 ) -> pd.DataFrame:
     df = load_data()
     now = datetime.now().isoformat()
+
     new_row = {
         "id": generate_id(username),
         "date": entry_date or date.today().isoformat(),
         "username": username,
         "name": name,
+        "team": team,
         "type": entry_type,
         "content": content.strip(),
         "priority": priority,
@@ -116,6 +117,7 @@ def add_entry(
         "created_at": now,
         "updated_at": now,
     }
+
     df = pd.concat([df, pd.DataFrame([new_row])], ignore_index=True)
     save_data(df)
     return df
@@ -146,19 +148,26 @@ def get_user_entries(username: str, entry_type: Optional[str] = None) -> pd.Data
     return df[mask].sort_values("created_at", ascending=False)
 
 
-def get_entries_by_date(target_date: str, entry_type: Optional[str] = None) -> pd.DataFrame:
+def get_entries_by_date(
+    target_date: str,
+    entry_type: Optional[str] = None,
+    team: Optional[str] = None,
+) -> pd.DataFrame:
     df = load_data()
     mask = df["date"] == target_date
     if entry_type:
         mask = mask & (df["type"] == entry_type)
-    return df[mask].sort_values(["name", "created_at"])
+    if team and team != "All Teams":
+        mask = mask & (df["team"] == team)
+    return df[mask].sort_values(["team", "name", "created_at"])
 
 
-def get_open_tasks() -> pd.DataFrame:
+def get_open_tasks(team: Optional[str] = None) -> pd.DataFrame:
     df = load_data()
-    return df[df["status"].isin(["Open", "In Progress"])].sort_values(
-        ["date", "priority"], ascending=[False, True]
-    )
+    mask = df["status"].isin(["Open", "In Progress"])
+    if team and team != "All Teams":
+        mask = mask & (df["team"] == team)
+    return df[mask].sort_values(["team", "date", "priority"], ascending=[True, False, True])
 
 
 def get_all_data() -> pd.DataFrame:
