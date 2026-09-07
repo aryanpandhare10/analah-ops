@@ -755,3 +755,5 @@ def get_all_teams() -> list:
         if team and team != "Admin":
             teams.add(team)
     return sorted(list(teams))
+print("auth.py loaded successfully")
+print("Available teams:", get_all_teams())
