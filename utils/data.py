@@ -1,90 +1,53 @@
 """
 Data layer for Analah Capital Ops Platform
-- Master Excel file for all tasks (team-wise)
-- Supports Team column
+Uses Supabase (PostgreSQL) for permanent storage
 """
 
-import os
+import streamlit as st
 import pandas as pd
 from datetime import datetime, date
 from typing import Optional
-import streamlit as st
-from openpyxl.styles import Font, PatternFill, Alignment, Border, Side
+from supabase import create_client, Client
 
-DATA_DIR = "data"
-MASTER_FILE = os.path.join(DATA_DIR, "Analah_Master_Tasks.xlsx")
+# ============================================================
+# SUPABASE CONNECTION
+# ============================================================
 
-COLUMNS = [
-    "id",
-    "date",
-    "username",
-    "name",
-    "team",           # NEW
-    "type",           # POA | EOD | Task
-    "content",
-    "priority",
-    "status",
-    "created_at",
-    "updated_at",
-]
-
-
-def ensure_data_dir():
-    os.makedirs(DATA_DIR, exist_ok=True)
-
-
-def _style_worksheet(ws):
-    header_fill = PatternFill(start_color="1E88E5", end_color="1E88E5", fill_type="solid")
-    header_font = Font(bold=True, color="FFFFFF")
-    thin = Border(
-        left=Side(style="thin"),
-        right=Side(style="thin"),
-        top=Side(style="thin"),
-        bottom=Side(style="thin"),
-    )
-
-    for cell in ws[1]:
-        cell.fill = header_fill
-        cell.font = header_font
-        cell.alignment = Alignment(horizontal="center", vertical="center")
-
-    for row in ws.iter_rows(min_row=2):
-        for cell in row:
-            cell.border = thin
-            cell.alignment = Alignment(wrap_text=True, vertical="top")
-
-    for col in ws.columns:
-        max_len = 0
-        col_letter = col[0].column_letter
-        for cell in col:
-            try:
-                max_len = max(max_len, len(str(cell.value or "")))
-            except Exception:
-                pass
-        ws.column_dimensions[col_letter].width = min(max_len + 3, 55)
+@st.cache_resource
+def get_supabase_client() -> Client:
+    url = st.secrets["supabase"]["url"]
+    key = st.secrets["supabase"]["key"]
+    return create_client(url, key)
 
 
 def load_data() -> pd.DataFrame:
-    ensure_data_dir()
-    if os.path.exists(MASTER_FILE):
-        try:
-            df = pd.read_excel(MASTER_FILE, engine="openpyxl")
-            for col in COLUMNS:
+    """Load all data from Supabase."""
+    try:
+        supabase = get_supabase_client()
+        response = supabase.table("tasks").select("*").order("created_at", desc=True).execute()
+        
+        if response.data:
+            df = pd.DataFrame(response.data)
+            # Ensure all expected columns exist
+            expected_cols = [
+                "id", "date", "username", "name", "team", "type",
+                "content", "priority", "status", "created_at", "updated_at"
+            ]
+            for col in expected_cols:
                 if col not in df.columns:
                     df[col] = None
-            return df[COLUMNS]
-        except Exception as e:
-            st.warning(f"Could not read master Excel: {e}. Starting fresh.")
-    return pd.DataFrame(columns=COLUMNS)
-
-
-def save_data(df: pd.DataFrame) -> None:
-    ensure_data_dir()
-    df = df[COLUMNS].dropna(how="all")
-    with pd.ExcelWriter(MASTER_FILE, engine="openpyxl") as writer:
-        df.to_excel(writer, index=False, sheet_name="All_Data")
-        ws = writer.sheets["All_Data"]
-        _style_worksheet(ws)
+            return df[expected_cols]
+        else:
+            return pd.DataFrame(columns=[
+                "id", "date", "username", "name", "team", "type",
+                "content", "priority", "status", "created_at", "updated_at"
+            ])
+    except Exception as e:
+        st.error(f"Error loading data from Supabase: {e}")
+        return pd.DataFrame(columns=[
+            "id", "date", "username", "name", "team", "type",
+            "content", "priority", "status", "created_at", "updated_at"
+        ])
 
 
 def generate_id(username: str) -> str:
@@ -100,44 +63,56 @@ def add_entry(
     priority: str = "Medium",
     status: str = "Open",
     entry_date: Optional[str] = None,
-) -> pd.DataFrame:
-    df = load_data()
-    now = datetime.now().isoformat()
+) -> bool:
+    """Add a new POA / EOD / Task entry to Supabase."""
+    try:
+        supabase = get_supabase_client()
+        now = datetime.now().isoformat()
 
-    new_row = {
-        "id": generate_id(username),
-        "date": entry_date or date.today().isoformat(),
-        "username": username,
-        "name": name,
-        "team": team,
-        "type": entry_type,
-        "content": content.strip(),
-        "priority": priority,
-        "status": status,
-        "created_at": now,
-        "updated_at": now,
-    }
+        new_row = {
+            "id": generate_id(username),
+            "date": entry_date or date.today().isoformat(),
+            "username": username,
+            "name": name,
+            "team": team,
+            "type": entry_type,
+            "content": content.strip(),
+            "priority": priority,
+            "status": status,
+            "created_at": now,
+            "updated_at": now,
+        }
 
-    df = pd.concat([df, pd.DataFrame([new_row])], ignore_index=True)
-    save_data(df)
-    return df
-
-
-def update_status(entry_id: str, new_status: str) -> pd.DataFrame:
-    df = load_data()
-    mask = df["id"] == entry_id
-    if mask.any():
-        df.loc[mask, "status"] = new_status
-        df.loc[mask, "updated_at"] = datetime.now().isoformat()
-        save_data(df)
-    return df
+        supabase.table("tasks").insert(new_row).execute()
+        return True
+    except Exception as e:
+        st.error(f"Error adding entry: {e}")
+        return False
 
 
-def delete_entry(entry_id: str) -> pd.DataFrame:
-    df = load_data()
-    df = df[df["id"] != entry_id].reset_index(drop=True)
-    save_data(df)
-    return df
+def update_status(entry_id: str, new_status: str) -> bool:
+    """Update status of a single entry."""
+    try:
+        supabase = get_supabase_client()
+        supabase.table("tasks").update({
+            "status": new_status,
+            "updated_at": datetime.now().isoformat()
+        }).eq("id", entry_id).execute()
+        return True
+    except Exception as e:
+        st.error(f"Error updating status: {e}")
+        return False
+
+
+def delete_entry(entry_id: str) -> bool:
+    """Delete an entry by ID."""
+    try:
+        supabase = get_supabase_client()
+        supabase.table("tasks").delete().eq("id", entry_id).execute()
+        return True
+    except Exception as e:
+        st.error(f"Error deleting entry: {e}")
+        return False
 
 
 def get_user_entries(username: str, entry_type: Optional[str] = None) -> pd.DataFrame:
@@ -172,7 +147,3 @@ def get_open_tasks(team: Optional[str] = None) -> pd.DataFrame:
 
 def get_all_data() -> pd.DataFrame:
     return load_data().sort_values("created_at", ascending=False)
-
-
-def get_master_file_path() -> str:
-    return MASTER_FILE
