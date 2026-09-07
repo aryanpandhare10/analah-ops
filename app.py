@@ -1,7 +1,8 @@
 """
 Analah Capital – Daily Ops & Task Infrastructure
-- Separate downloadable POA and EOD reports
-- One Master Excel file for current tasks (team-wise)
+- Separate POA / EOD downloads
+- Master Tasks file (team-wise)
+- Team filtering for Admin
 """
 
 import streamlit as st
@@ -17,6 +18,7 @@ from utils.auth import (
     is_admin,
     logout,
     get_current_user,
+    get_all_teams,
 )
 from utils.data import (
     add_entry,
@@ -74,10 +76,12 @@ user = get_current_user()
 username = st.session_state.username
 admin = is_admin(user)
 today = date.today().isoformat()
+user_team = user.get("team", "Unknown")
 
 # -------------------- SIDEBAR --------------------
 with st.sidebar:
     st.markdown(f"### 👋 {user['name']}")
+    st.caption(f"Team: **{user_team}**")
     st.caption(f"Role: {'Administrator' if admin else 'Team Member'}")
     st.divider()
 
@@ -103,7 +107,7 @@ with st.sidebar:
         logout()
 
 
-# -------------------- HELPER: Create Excel bytes --------------------
+# -------------------- HELPER --------------------
 def create_excel_bytes(df: pd.DataFrame) -> bytes:
     output = io.BytesIO()
     with pd.ExcelWriter(output, engine="openpyxl") as writer:
@@ -148,7 +152,7 @@ def create_excel_bytes(df: pd.DataFrame) -> bytes:
 # ========== 1. MY POA / EOD ==========
 if page == "📝 My POA / EOD":
     st.title("Daily Plan of Action & EOD")
-    st.caption(f"Date: **{today}**")
+    st.caption(f"Date: **{today}**  |  Team: **{user_team}**")
 
     tab_poa, tab_eod = st.tabs(["Plan of Action (POA)", "End of Day (EOD)"])
 
@@ -157,7 +161,7 @@ if page == "📝 My POA / EOD":
             content = st.text_area(
                 "Today's Plan of Action",
                 height=180,
-                placeholder="Key priorities, meetings, deals, follow-ups, client calls...",
+                placeholder="Key priorities, meetings, deals, follow-ups...",
             )
             priority = st.selectbox("Priority", ["High", "Medium", "Low"])
             if st.form_submit_button("Submit POA", type="primary"):
@@ -165,6 +169,7 @@ if page == "📝 My POA / EOD":
                     add_entry(
                         username=username,
                         name=user["name"],
+                        team=user_team,
                         entry_type="POA",
                         content=content,
                         priority=priority,
@@ -180,13 +185,14 @@ if page == "📝 My POA / EOD":
             content = st.text_area(
                 "End of Day Summary / Completed Work",
                 height=180,
-                placeholder="What was completed? Key outcomes, blockers, handovers, next steps...",
+                placeholder="What was completed? Key outcomes, blockers, next steps...",
             )
             if st.form_submit_button("Submit EOD", type="primary"):
                 if content.strip():
                     add_entry(
                         username=username,
                         name=user["name"],
+                        team=user_team,
                         entry_type="EOD",
                         content=content,
                         priority="Medium",
@@ -200,6 +206,7 @@ if page == "📝 My POA / EOD":
 # ========== 2. MY TASKS ==========
 elif page == "📋 My Tasks":
     st.title("My Current Tasks")
+    st.caption(f"Team: **{user_team}**")
 
     with st.expander("➕ Add New Task", expanded=False):
         with st.form("add_task_form"):
@@ -210,6 +217,7 @@ elif page == "📋 My Tasks":
                     add_entry(
                         username=username,
                         name=user["name"],
+                        team=user_team,
                         entry_type="Task",
                         content=t_content,
                         priority=t_priority,
@@ -257,15 +265,18 @@ elif page == "📋 My Tasks":
 # ========== 3. ADMIN DASHBOARD ==========
 elif page == "📊 Admin Dashboard" and admin:
     st.title("Admin Dashboard – Current Tasks")
-    st.caption("Live view of all open tasks from the Master Excel file (team-wise)")
+    st.caption("Open & In-Progress tasks (Team-wise)")
 
-    open_df = get_open_tasks()
+    teams = ["All Teams"] + get_all_teams()
+    selected_team = st.selectbox("Filter by Team", teams)
+
+    open_df = get_open_tasks(team=selected_team)
 
     if open_df.empty:
         st.success("No open tasks right now 🎉")
     else:
         st.dataframe(
-            open_df[["date", "name", "type", "content", "priority", "status", "updated_at"]],
+            open_df[["date", "team", "name", "type", "content", "priority", "status", "updated_at"]],
             use_container_width=True,
             hide_index=True,
         )
@@ -274,30 +285,39 @@ elif page == "📊 Admin Dashboard" and admin:
         m1.metric("Open", len(open_df[open_df["status"] == "Open"]))
         m2.metric("In Progress", len(open_df[open_df["status"] == "In Progress"]))
         m3.metric("High Priority", len(open_df[open_df["priority"] == "High"]))
-        m4.metric("Active Members", open_df["name"].nunique())
+        m4.metric("People", open_df["name"].nunique())
 
 # ========== 4. DOWNLOADS & REPORTS ==========
 elif page == "📥 Downloads & Reports" and admin:
     st.title("Downloads & Reports")
 
-    # ---------- Daily POA / EOD Reports ----------
+    # ---------- Daily POA / EOD ----------
     st.subheader("1. Daily POA / EOD Reports")
-    st.caption("Download separate Excel files for Plan of Action or End of Day")
+    st.caption("Download separate Excel files filtered by Date + Type + Team")
 
-    c1, c2 = st.columns(2)
+    c1, c2, c3 = st.columns(3)
     with c1:
         report_date = st.date_input("Select Date", value=date.today())
     with c2:
         report_type = st.selectbox("Report Type", ["POA", "EOD"])
+    with c3:
+        teams = ["All Teams"] + get_all_teams()
+        selected_team = st.selectbox("Team", teams)
 
-    filtered = get_entries_by_date(report_date.isoformat(), entry_type=report_type)
+    filtered = get_entries_by_date(
+        target_date=report_date.isoformat(),
+        entry_type=report_type,
+        team=selected_team,
+    )
 
     if filtered.empty:
-        st.warning(f"No {report_type} records found for {report_date.isoformat()}")
+        st.warning(f"No {report_type} records found for the selected filters.")
     else:
         st.dataframe(filtered, use_container_width=True, hide_index=True)
 
-        filename = f"{report_date.isoformat()}_{report_type}.xlsx"
+        # Filename example: 2026-09-07_POA_Harshad_Pacharane.xlsx
+        team_part = selected_team.replace(" ", "_") if selected_team != "All Teams" else "All_Teams"
+        filename = f"{report_date.isoformat()}_{report_type}_{team_part}.xlsx"
         excel_bytes = create_excel_bytes(filtered)
 
         st.download_button(
@@ -310,22 +330,22 @@ elif page == "📥 Downloads & Reports" and admin:
 
     st.divider()
 
-    # ---------- Master Tasks File ----------
+    # ---------- Master File ----------
     st.subheader("2. Master Tasks File (Team-wise)")
-    st.caption("This is the single existing file that contains all current tasks of the team.")
+    st.caption("Single source of truth containing all current tasks of all teams.")
 
     master_path = get_master_file_path()
     if os.path.exists(master_path):
         with open(master_path, "rb") as f:
             st.download_button(
-                label="⬇️ Download Master Tasks Excel (All Current Tasks)",
+                label="⬇️ Download Master Tasks Excel (All Teams)",
                 data=f,
                 file_name="Analah_Master_Tasks.xlsx",
                 mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
                 type="primary",
             )
     else:
-        st.info("Master file will be created automatically after the first entry is submitted.")
+        st.info("Master file will be created automatically after the first entry.")
 
 # ========== 5. ACTIVITY / HISTORY ==========
 elif page in ["📜 Activity Log", "📜 My History"]:
@@ -340,4 +360,4 @@ elif page in ["📜 Activity Log", "📜 My History"]:
 
 # -------------------- FOOTER --------------------
 st.markdown("---")
-st.caption("Analah Capital Internal Ops Platform • Light Theme • Master Excel Storage")
+st.caption("Analah Capital Internal Ops Platform • Team-wise • Master Excel Storage")
