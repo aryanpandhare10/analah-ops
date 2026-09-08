@@ -20,6 +20,13 @@ USERS: Dict[str, Dict[str, Any]] = {
         "email": "admin@analah.com",
     },
 
+    "aryaan": {
+        "password": "aryaan123",
+        "name": "Aryaan Pandhare",
+        "role": "user",
+        "team": "Susmit Mishra",
+        "email": "",
+
     # -------------------- Team: Harshad Pacharane --------------------
     "harshad": {
         "password": "harshad123",
