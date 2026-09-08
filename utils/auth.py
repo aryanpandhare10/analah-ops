@@ -26,6 +26,7 @@ USERS: Dict[str, Dict[str, Any]] = {
         "role": "user",
         "team": "Susmit Mishra",
         "email": "",
+    },
 
     # -------------------- Team: Harshad Pacharane --------------------
     "harshad": {
